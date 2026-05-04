@@ -16,7 +16,7 @@ export interface AppleReminder {
 
 // ─── JXA script runners ─────────────────────────────────────────
 
-const JXA_TIMEOUT_MS = 120_000; // 120s per osascript call
+const JXA_TIMEOUT_MS = 6000_000; // 6000s per osascript call
 
 /** Run a JXA script and return parsed JSON (with timeout) */
 function runJxa<T>(script: string): Promise<T> {
