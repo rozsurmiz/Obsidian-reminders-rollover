@@ -8,6 +8,7 @@ export interface PluginSettings {
   syncTagPrefix: string;             // tag used to mark synced tasks, e.g. #reminders
   syncNotePath: string;              // note file where synced reminders live (relative to vault root)
   autoSyncOnStartup: boolean;
+  skipCompleted: boolean;            // only sync incomplete reminders (much faster)
 
   // Flagged reminders
   syncFlagged: boolean;              // enable flagged reminders sync
@@ -27,6 +28,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   syncTagPrefix: "#reminders",
   syncNotePath: "Reminders.md",
   autoSyncOnStartup: false,
+  skipCompleted: true,
 
   syncFlagged: true,
   flaggedNotePath: "Flagged Reminders.md",
@@ -102,6 +104,18 @@ export class SettingsTab extends PluginSettingTab {
           .setValue(this.plugin.settings.autoSyncOnStartup)
           .onChange(async (value) => {
             this.plugin.settings.autoSyncOnStartup = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Skip completed reminders")
+      .setDesc("Only sync incomplete reminders. Much faster if you have a large history of completed items.")
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.skipCompleted)
+          .onChange(async (value) => {
+            this.plugin.settings.skipCompleted = value;
             await this.plugin.saveSettings();
           })
       );
