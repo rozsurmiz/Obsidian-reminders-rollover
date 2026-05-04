@@ -9,6 +9,10 @@ export interface PluginSettings {
   syncNotePath: string;              // note file where synced reminders live (relative to vault root)
   autoSyncOnStartup: boolean;
 
+  // Flagged reminders
+  syncFlagged: boolean;              // enable flagged reminders sync
+  flaggedNotePath: string;           // note file for flagged reminders
+
   // Task rollover
   rolloverOnStartup: boolean;
   rolloverHeading: string;           // heading under which rolled tasks appear
@@ -23,6 +27,9 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   syncTagPrefix: "#reminders",
   syncNotePath: "Reminders.md",
   autoSyncOnStartup: false,
+
+  syncFlagged: true,
+  flaggedNotePath: "Flagged Reminders.md",
 
   rolloverOnStartup: true,
   rolloverHeading: "Rolled Over",
@@ -95,6 +102,34 @@ export class SettingsTab extends PluginSettingTab {
           .setValue(this.plugin.settings.autoSyncOnStartup)
           .onChange(async (value) => {
             this.plugin.settings.autoSyncOnStartup = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    // ── Flagged reminders section ──
+    containerEl.createEl("h2", { text: "Flagged Reminders" });
+
+    new Setting(containerEl)
+      .setName("Sync flagged reminders")
+      .setDesc("Pull flagged reminders from all lists into a dedicated note.")
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.syncFlagged)
+          .onChange(async (value) => {
+            this.plugin.settings.syncFlagged = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Flagged note path")
+      .setDesc("Vault-relative path for flagged reminders (e.g. Flagged Reminders.md).")
+      .addText((text) =>
+        text
+          .setPlaceholder("Flagged Reminders.md")
+          .setValue(this.plugin.settings.flaggedNotePath)
+          .onChange(async (value) => {
+            this.plugin.settings.flaggedNotePath = value;
             await this.plugin.saveSettings();
           })
       );

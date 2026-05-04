@@ -1,6 +1,6 @@
 import { Notice, Plugin } from "obsidian";
 import { DEFAULT_SETTINGS, SettingsTab } from "./settings";
-import { syncReminders, getRemindersLists } from "./reminders";
+import { syncReminders, syncFlaggedReminders, getRemindersLists } from "./reminders";
 import { rolloverTasks } from "./rollover";
 import type { PluginSettings } from "./settings";
 
@@ -63,6 +63,23 @@ export default class RemindersRolloverPlugin extends Plugin {
       },
     });
 
+    this.addCommand({
+      id: "sync-flagged-reminders",
+      name: "Sync flagged reminders (all lists)",
+      callback: async () => {
+        new Notice("⏳ Syncing flagged reminders…");
+        try {
+          const result = await syncFlaggedReminders(this.app.vault, this.settings);
+          new Notice(
+            `✅ Flagged sync complete — ${result.pulled} pulled, ${result.pushed} pushed`
+          );
+        } catch (e) {
+          console.error("[Flagged Sync]", e);
+          new Notice("❌ Flagged reminders sync failed. Check the console.");
+        }
+      },
+    });
+
     // ── Startup hooks ──
     this.app.workspace.onLayoutReady(async () => {
       if (this.settings.autoSyncOnStartup) {
@@ -75,6 +92,20 @@ export default class RemindersRolloverPlugin extends Plugin {
           }
         } catch (e) {
           console.error("[Auto Reminders Sync]", e);
+        }
+
+        // Also sync flagged if enabled
+        if (this.settings.syncFlagged) {
+          try {
+            const flagResult = await syncFlaggedReminders(this.app.vault, this.settings);
+            if (flagResult.pulled + flagResult.pushed > 0) {
+              new Notice(
+                `🚩 Auto-flagged sync: ${flagResult.pulled} pulled, ${flagResult.pushed} pushed`
+              );
+            }
+          } catch (e) {
+            console.error("[Auto Flagged Sync]", e);
+          }
         }
       }
 

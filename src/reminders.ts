@@ -7,9 +7,11 @@ export interface AppleReminder {
   id: string;
   name: string;
   completed: boolean;
+  flagged: boolean;
   dueDate: string | null;
   notes: string | null;
   priority: number; // 0 = none, 1 = high, 5 = medium, 9 = low
+  listName: string;
 }
 
 // ─── JXA script runners ─────────────────────────────────────────
@@ -76,10 +78,41 @@ export async function getReminders(listName: string): Promise<AppleReminder[]> {
       id: r.id(),
       name: r.name(),
       completed: r.completed(),
+      flagged: r.flagged(),
       dueDate: r.dueDate() ? r.dueDate().toISOString() : null,
       notes: r.body() || null,
-      priority: r.priority()
+      priority: r.priority(),
+      listName: "${escaped}"
     })));
+  `;
+  return runJxa<AppleReminder[]>(script);
+}
+
+/** Fetch all flagged reminders across every list */
+export async function getFlaggedReminders(): Promise<AppleReminder[]> {
+  const script = `
+    const app = Application("Reminders");
+    const results = [];
+    const lists = app.lists();
+    for (const list of lists) {
+      const listName = list.name();
+      const rems = list.reminders();
+      for (const r of rems) {
+        if (r.flagged()) {
+          results.push({
+            id: r.id(),
+            name: r.name(),
+            completed: r.completed(),
+            flagged: true,
+            dueDate: r.dueDate() ? r.dueDate().toISOString() : null,
+            notes: r.body() || null,
+            priority: r.priority(),
+            listName: listName
+          });
+        }
+      }
+    }
+    JSON.stringify(results);
   `;
   return runJxa<AppleReminder[]>(script);
 }
@@ -259,4 +292,70 @@ export async function syncReminders(
   await vault.modify(tfile, content);
 
   return { pulled, pushed, created };
+}
+
+/**
+ * Sync flagged reminders from ALL lists into a dedicated note.
+ * Pull-only + push completion status back.
+ * Each task shows which list it came from.
+ */
+export async function syncFlaggedReminders(
+  vault: Vault,
+  settings: PluginSettings
+): Promise<{ pulled: number; pushed: number }> {
+  const { flaggedNotePath, syncTagPrefix } = settings;
+
+  // 1. Fetch flagged reminders across all lists
+  let flagged: AppleReminder[];
+  try {
+    flagged = await getFlaggedReminders();
+  } catch (e) {
+    new Notice("❌ Could not read flagged reminders. Is Reminders running?");
+    throw e;
+  }
+
+  // 2. Read or create the flagged note
+  let file = vault.getAbstractFileByPath(flaggedNotePath);
+  if (!file || !(file instanceof TFile)) {
+    await vault.create(flaggedNotePath, "# Flagged Reminders\n\n");
+    file = vault.getAbstractFileByPath(flaggedNotePath);
+  }
+  const tfile = file as TFile;
+  let content = await vault.read(tfile);
+
+  const existingTasks = parseTasks(content);
+  const trackedIds = new Set(existingTasks.filter((t) => t.reminderId).map((t) => t.reminderId));
+
+  let pulled = 0;
+  let pushed = 0;
+
+  // 3. Pull: flagged reminders not yet in the note
+  const newLines: string[] = [];
+  for (const rem of flagged) {
+    if (trackedIds.has(rem.id)) continue;
+    const check = rem.completed ? "x" : " ";
+    const line = `- [${check}] ${rem.name} (${rem.listName}) ${syncTagPrefix} %%rid:${rem.id}%%`;
+    newLines.push(line);
+    pulled++;
+  }
+  if (newLines.length > 0) {
+    content = content.trimEnd() + "\n" + newLines.join("\n") + "\n";
+  }
+
+  // 4. Push: checkbox changes back to Apple Reminders
+  const remMap = new Map(flagged.map((r) => [r.id, r]));
+  for (const task of existingTasks) {
+    if (!task.reminderId) continue;
+    const rem = remMap.get(task.reminderId);
+    if (!rem) continue;
+    if (task.checked !== rem.completed) {
+      await setReminderCompleted(task.reminderId, task.checked);
+      pushed++;
+    }
+  }
+
+  // 5. Write back
+  await vault.modify(tfile, content);
+
+  return { pulled, pushed };
 }
