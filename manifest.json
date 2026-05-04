@@ -1,0 +1,9 @@
+{
+  "id": "reminders-rollover",
+  "name": "Reminders Sync & Task Rollover",
+  "version": "1.0.0",
+  "minAppVersion": "1.0.0",
+  "description": "Sync Apple Reminders with Obsidian tasks and roll over unchecked daily note tasks to today.",
+  "author": "Poshan Khanal",
+  "isDesktopOnly": true
+}
