@@ -1,11 +1,30 @@
 import { Notice, Plugin } from "obsidian";
 import { DEFAULT_SETTINGS, SettingsTab } from "./settings";
 import { syncReminders, syncFlaggedReminders, getRemindersLists } from "./reminders";
+import type { ProgressFn } from "./reminders";
 import { rolloverTasks } from "./rollover";
 import type { PluginSettings } from "./settings";
 
 export default class RemindersRolloverPlugin extends Plugin {
   settings: PluginSettings = DEFAULT_SETTINGS;
+
+  /** Show a notice that auto-hides, returning it so we can hide it early */
+  private progressNotice: Notice | null = null;
+
+  private showProgress: ProgressFn = (msg: string) => {
+    if (this.progressNotice) {
+      this.progressNotice.setMessage(msg);
+    } else {
+      this.progressNotice = new Notice(msg, 0); // 0 = stays until dismissed
+    }
+  };
+
+  private clearProgress() {
+    if (this.progressNotice) {
+      this.progressNotice.hide();
+      this.progressNotice = null;
+    }
+  }
 
   async onload() {
     await this.loadSettings();
@@ -19,13 +38,15 @@ export default class RemindersRolloverPlugin extends Plugin {
       id: "sync-reminders",
       name: "Sync Apple Reminders",
       callback: async () => {
-        new Notice("⏳ Syncing Apple Reminders…");
+        this.showProgress("⏳ Syncing Apple Reminders…");
         try {
-          const result = await syncReminders(this.app.vault, this.settings);
+          const result = await syncReminders(this.app.vault, this.settings, this.showProgress);
+          this.clearProgress();
           new Notice(
             `✅ Reminders sync complete — ${result.pulled} pulled, ${result.pushed} pushed, ${result.created} created`
           );
         } catch (e) {
+          this.clearProgress();
           console.error("[Reminders Sync]", e);
           new Notice("❌ Reminders sync failed. Check the console for details.");
         }
@@ -67,13 +88,15 @@ export default class RemindersRolloverPlugin extends Plugin {
       id: "sync-flagged-reminders",
       name: "Sync flagged reminders (all lists)",
       callback: async () => {
-        new Notice("⏳ Syncing flagged reminders…");
+        this.showProgress("⏳ Syncing flagged reminders…");
         try {
-          const result = await syncFlaggedReminders(this.app.vault, this.settings);
+          const result = await syncFlaggedReminders(this.app.vault, this.settings, this.showProgress);
+          this.clearProgress();
           new Notice(
             `✅ Flagged sync complete — ${result.pulled} pulled, ${result.pushed} pushed`
           );
         } catch (e) {
+          this.clearProgress();
           console.error("[Flagged Sync]", e);
           new Notice("❌ Flagged reminders sync failed. Check the console.");
         }
@@ -83,28 +106,36 @@ export default class RemindersRolloverPlugin extends Plugin {
     // ── Startup hooks ──
     this.app.workspace.onLayoutReady(async () => {
       if (this.settings.autoSyncOnStartup) {
+        this.showProgress("🔄 Auto-sync starting…");
         try {
-          const result = await syncReminders(this.app.vault, this.settings);
+          const result = await syncReminders(this.app.vault, this.settings, this.showProgress);
+          this.clearProgress();
           if (result.pulled + result.pushed + result.created > 0) {
             new Notice(
               `🔄 Auto-sync: ${result.pulled} pulled, ${result.pushed} pushed, ${result.created} created`
             );
           }
         } catch (e) {
+          this.clearProgress();
           console.error("[Auto Reminders Sync]", e);
+          new Notice("❌ Auto-sync failed. Check console (Cmd+Option+I).");
         }
 
         // Also sync flagged if enabled
         if (this.settings.syncFlagged) {
+          this.showProgress("🚩 Syncing flagged reminders…");
           try {
-            const flagResult = await syncFlaggedReminders(this.app.vault, this.settings);
+            const flagResult = await syncFlaggedReminders(this.app.vault, this.settings, this.showProgress);
+            this.clearProgress();
             if (flagResult.pulled + flagResult.pushed > 0) {
               new Notice(
                 `🚩 Auto-flagged sync: ${flagResult.pulled} pulled, ${flagResult.pushed} pushed`
               );
             }
           } catch (e) {
+            this.clearProgress();
             console.error("[Auto Flagged Sync]", e);
+            new Notice("❌ Flagged auto-sync failed. Check console.");
           }
         }
       }

@@ -16,16 +16,21 @@ export interface AppleReminder {
 
 // ─── JXA script runners ─────────────────────────────────────────
 
-/** Run a JXA script and return parsed JSON */
+const JXA_TIMEOUT_MS = 30_000; // 30s per osascript call
+
+/** Run a JXA script and return parsed JSON (with timeout) */
 function runJxa<T>(script: string): Promise<T> {
   return new Promise((resolve, reject) => {
-    execFile(
+    const child = execFile(
       "/usr/bin/osascript",
       ["-l", "JavaScript", "-e", script],
-      { maxBuffer: 5 * 1024 * 1024 },
+      { maxBuffer: 5 * 1024 * 1024, timeout: JXA_TIMEOUT_MS },
       (err, stdout, stderr) => {
         if (err) {
-          reject(new Error(`osascript failed: ${stderr || err.message}`));
+          const msg = (err as any).killed
+            ? `osascript timed out after ${JXA_TIMEOUT_MS / 1000}s — Reminders may be unresponsive`
+            : `osascript failed: ${stderr || err.message}`;
+          reject(new Error(msg));
           return;
         }
         try {
@@ -38,15 +43,19 @@ function runJxa<T>(script: string): Promise<T> {
   });
 }
 
-/** Run a JXA script that returns nothing meaningful */
+/** Run a JXA script that returns nothing meaningful (with timeout) */
 function runJxaVoid(script: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    execFile(
+    const child = execFile(
       "/usr/bin/osascript",
       ["-l", "JavaScript", "-e", script],
+      { timeout: JXA_TIMEOUT_MS },
       (err, _stdout, stderr) => {
         if (err) {
-          reject(new Error(`osascript failed: ${stderr || err.message}`));
+          const msg = (err as any).killed
+            ? `osascript timed out after ${JXA_TIMEOUT_MS / 1000}s — Reminders may be unresponsive`
+            : `osascript failed: ${stderr || err.message}`;
+          reject(new Error(msg));
           return;
         }
         resolve();
@@ -88,33 +97,57 @@ export async function getReminders(listName: string): Promise<AppleReminder[]> {
   return runJxa<AppleReminder[]>(script);
 }
 
-/** Fetch all flagged reminders across every list */
-export async function getFlaggedReminders(): Promise<AppleReminder[]> {
+/** Fetch flagged reminders from a single list */
+async function getFlaggedFromList(listName: string): Promise<AppleReminder[]> {
+  const escaped = listName.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
   const script = `
     const app = Application("Reminders");
+    const list = app.lists.byName("${escaped}");
     const results = [];
-    const lists = app.lists();
-    for (const list of lists) {
-      const listName = list.name();
-      const rems = list.reminders();
-      for (const r of rems) {
-        if (r.flagged()) {
-          results.push({
-            id: r.id(),
-            name: r.name(),
-            completed: r.completed(),
-            flagged: true,
-            dueDate: r.dueDate() ? r.dueDate().toISOString() : null,
-            notes: r.body() || null,
-            priority: r.priority(),
-            listName: listName
-          });
-        }
+    const rems = list.reminders();
+    for (const r of rems) {
+      if (r.flagged()) {
+        results.push({
+          id: r.id(),
+          name: r.name(),
+          completed: r.completed(),
+          flagged: true,
+          dueDate: r.dueDate() ? r.dueDate().toISOString() : null,
+          notes: r.body() || null,
+          priority: r.priority(),
+          listName: "${escaped}"
+        });
       }
     }
     JSON.stringify(results);
   `;
   return runJxa<AppleReminder[]>(script);
+}
+
+/** Progress callback type */
+export type ProgressFn = (message: string) => void;
+
+/** Fetch all flagged reminders across every list, reporting progress per list */
+export async function getFlaggedReminders(
+  onProgress?: ProgressFn
+): Promise<AppleReminder[]> {
+  const lists = await getRemindersLists();
+  const all: AppleReminder[] = [];
+
+  for (let i = 0; i < lists.length; i++) {
+    const listName = lists[i];
+    if (onProgress) {
+      onProgress(`🔍 Scanning "${listName}" for flagged items (${i + 1}/${lists.length})…`);
+    }
+    try {
+      const flagged = await getFlaggedFromList(listName);
+      all.push(...flagged);
+    } catch (e) {
+      console.warn(`Skipping list "${listName}":`, e);
+    }
+  }
+
+  return all;
 }
 
 /** Create a new reminder in the given list */
@@ -202,11 +235,13 @@ function stripTagAndId(text: string, tagPrefix: string): string {
  */
 export async function syncReminders(
   vault: Vault,
-  settings: PluginSettings
+  settings: PluginSettings,
+  onProgress?: ProgressFn
 ): Promise<{ pulled: number; pushed: number; created: number }> {
   const { remindersListName, syncNotePath, syncTagPrefix } = settings;
 
   // 1. Fetch current reminders from Apple
+  if (onProgress) onProgress(`⏳ Reading list "${remindersListName}"…`);
   let appleReminders: AppleReminder[];
   try {
     appleReminders = await getReminders(remindersListName);
@@ -301,18 +336,22 @@ export async function syncReminders(
  */
 export async function syncFlaggedReminders(
   vault: Vault,
-  settings: PluginSettings
+  settings: PluginSettings,
+  onProgress?: ProgressFn
 ): Promise<{ pulled: number; pushed: number }> {
   const { flaggedNotePath, syncTagPrefix } = settings;
 
   // 1. Fetch flagged reminders across all lists
+  if (onProgress) onProgress("⏳ Scanning all lists for flagged reminders…");
   let flagged: AppleReminder[];
   try {
-    flagged = await getFlaggedReminders();
+    flagged = await getFlaggedReminders(onProgress);
   } catch (e) {
     new Notice("❌ Could not read flagged reminders. Is Reminders running?");
     throw e;
   }
+
+  if (onProgress) onProgress(`📝 Found ${flagged.length} flagged reminder(s), writing to note…`);
 
   // 2. Read or create the flagged note
   let file = vault.getAbstractFileByPath(flaggedNotePath);

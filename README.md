@@ -15,7 +15,7 @@ An Obsidian plugin that does two things:
 
 ```bash
 cd /path/to/your/vault/.obsidian/plugins/
-git clone <this-repo> Obsidian-reminders-rollover
+git clone <this-repo> reminders-rollover
 cd reminders-rollover
 npm install
 npm run build
@@ -26,7 +26,7 @@ Then restart Obsidian and enable the plugin under **Settings → Community plugi
 ### Option B: Copy the built file
 
 1. Run `npm install && npm run build` in this directory
-2. Copy these files into your vault at `.obsidian/plugins/Obsidian-reminders-rollover/`:
+2. Copy these files into your vault at `.obsidian/plugins/reminders-rollover/`:
    - `main.js`
    - `manifest.json`
 3. Restart Obsidian and enable the plugin
