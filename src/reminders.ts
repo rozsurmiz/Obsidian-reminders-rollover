@@ -16,7 +16,7 @@ export interface AppleReminder {
 
 // ─── JXA script runners ─────────────────────────────────────────
 
-const JXA_TIMEOUT_MS = 6000_000; // 6000s per osascript call
+const JXA_TIMEOUT_MS = 60_000; // 60s per osascript call (batch access is fast)
 
 /** Run a JXA script and return parsed JSON (with timeout) */
 function runJxa<T>(script: string): Promise<T> {
@@ -70,31 +70,41 @@ function runJxaVoid(script: string): Promise<void> {
 export async function getRemindersLists(): Promise<string[]> {
   const script = `
     const app = Application("Reminders");
-    const lists = app.lists();
-    JSON.stringify(lists.map(l => l.name()));
+    JSON.stringify(app.lists.name());
   `;
   return runJxa<string[]>(script);
 }
 
-/** Fetch reminders from a named list, optionally skipping completed */
+/**
+ * Fetch reminders from a named list using BATCH property access.
+ * Instead of r.name(), r.id(), etc. per reminder (= thousands of Apple Events),
+ * we call list.reminders.name(), list.reminders.id(), etc. once each
+ * (= ~7 Apple Events total, regardless of list size).
+ */
 export async function getReminders(listName: string, skipCompleted = false): Promise<AppleReminder[]> {
   const escaped = listName.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-  const filterLine = skipCompleted ? 'if (r.completed()) continue;' : '';
   const script = `
     const app = Application("Reminders");
     const list = app.lists.byName("${escaped}");
-    const rems = list.reminders();
+    const r = list.reminders;
+    const ids = r.id();
+    const names = r.name();
+    const comps = r.completed();
+    const flags = r.flagged();
+    const dues = r.dueDate();
+    const bodies = r.body();
+    const pris = r.priority();
     const results = [];
-    for (const r of rems) {
-      ${filterLine}
+    for (let i = 0; i < ids.length; i++) {
+      ${skipCompleted ? 'if (comps[i]) continue;' : ''}
       results.push({
-        id: r.id(),
-        name: r.name(),
-        completed: r.completed(),
-        flagged: r.flagged(),
-        dueDate: r.dueDate() ? r.dueDate().toISOString() : null,
-        notes: r.body() || null,
-        priority: r.priority(),
+        id: ids[i],
+        name: names[i],
+        completed: comps[i],
+        flagged: flags[i],
+        dueDate: dues[i] ? dues[i].toISOString() : null,
+        notes: bodies[i] || null,
+        priority: pris[i],
         listName: "${escaped}"
       });
     }
@@ -103,29 +113,36 @@ export async function getReminders(listName: string, skipCompleted = false): Pro
   return runJxa<AppleReminder[]>(script);
 }
 
-/** Fetch flagged reminders from a single list */
+/**
+ * Fetch flagged reminders from a single list using batch access.
+ */
 async function getFlaggedFromList(listName: string, skipCompleted = false): Promise<AppleReminder[]> {
   const escaped = listName.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-  const filterLine = skipCompleted ? 'if (r.completed()) continue;' : '';
   const script = `
     const app = Application("Reminders");
     const list = app.lists.byName("${escaped}");
+    const r = list.reminders;
+    const ids = r.id();
+    const names = r.name();
+    const comps = r.completed();
+    const flags = r.flagged();
+    const dues = r.dueDate();
+    const bodies = r.body();
+    const pris = r.priority();
     const results = [];
-    const rems = list.reminders();
-    for (const r of rems) {
-      ${filterLine}
-      if (r.flagged()) {
-        results.push({
-          id: r.id(),
-          name: r.name(),
-          completed: r.completed(),
-          flagged: true,
-          dueDate: r.dueDate() ? r.dueDate().toISOString() : null,
-          notes: r.body() || null,
-          priority: r.priority(),
-          listName: "${escaped}"
-        });
-      }
+    for (let i = 0; i < ids.length; i++) {
+      ${skipCompleted ? 'if (comps[i]) continue;' : ''}
+      if (!flags[i]) continue;
+      results.push({
+        id: ids[i],
+        name: names[i],
+        completed: comps[i],
+        flagged: true,
+        dueDate: dues[i] ? dues[i].toISOString() : null,
+        notes: bodies[i] || null,
+        priority: pris[i],
+        listName: "${escaped}"
+      });
     }
     JSON.stringify(results);
   `;
