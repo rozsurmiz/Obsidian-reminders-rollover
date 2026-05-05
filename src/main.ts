@@ -1,9 +1,10 @@
 import { Notice, Plugin } from "obsidian";
 import { DEFAULT_SETTINGS, SettingsTab } from "./settings";
-import { syncReminders, syncFlaggedReminders, getRemindersLists } from "./reminders";
+import { syncReminders, syncFlaggedReminders, getRemindersLists, getRemindersListsDetailed, setHelperPath } from "./reminders";
 import type { ProgressFn } from "./reminders";
 import { rolloverTasks } from "./rollover";
 import type { PluginSettings } from "./settings";
+import * as path from "path";
 
 export default class RemindersRolloverPlugin extends Plugin {
   settings: PluginSettings = DEFAULT_SETTINGS;
@@ -28,6 +29,13 @@ export default class RemindersRolloverPlugin extends Plugin {
 
   async onload() {
     await this.loadSettings();
+
+    // ── Set up Swift helper path ──
+    const adapter = this.app.vault.adapter as any;
+    const vaultPath: string = adapter.basePath || adapter.getBasePath?.() || "";
+    const pluginDir = path.join(vaultPath, ".obsidian", "plugins", this.manifest.id);
+    const helperPath = path.join(pluginDir, "reminders-helper.swift");
+    setHelperPath(helperPath);
 
     // ── Settings tab ──
     this.addSettingTab(new SettingsTab(this.app, this));
@@ -76,10 +84,14 @@ export default class RemindersRolloverPlugin extends Plugin {
       name: "Show available Reminders lists",
       callback: async () => {
         try {
-          const lists = await getRemindersLists();
-          new Notice(`📋 Reminders lists:\n${lists.join("\n")}`, 8000);
+          const lists = await getRemindersListsDetailed();
+          const msg = lists
+            .map((l) => `${l.name} (${l.account}) — ${l.count} items`)
+            .join("\n");
+          new Notice(`📋 All Reminders lists:\n${msg}`, 12000);
         } catch (e) {
-          new Notice("❌ Could not read Reminders lists. Is Reminders.app running?");
+          new Notice("❌ Could not read Reminders lists. Check console.");
+          console.error("[List Reminders]", e);
         }
       },
     });
