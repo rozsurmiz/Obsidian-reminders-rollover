@@ -70,8 +70,16 @@ struct ListInfo: Codable {
 }
 
 /// Check if a reminder is flagged (compatible with all macOS versions)
+import ObjectiveC  // add this at the top, after EventKit
+
 func isReminderFlagged(_ reminder: EKReminder) -> Bool {
-    return (reminder.value(forKey: "flagged") as? Bool) ?? false
+    let sel = NSSelectorFromString("isFlagged")
+    guard reminder.responds(to: sel) else { return false }
+    guard let method = class_getInstanceMethod(type(of: reminder), sel) else { return false }
+    let imp = method_getImplementation(method)
+    typealias IsFlaggedFunc = @convention(c) (AnyObject, Selector) -> ObjCBool
+    let fn = unsafeBitCast(imp, to: IsFlaggedFunc.self)
+    return fn(reminder, sel).boolValue
 }
 
 func fetchReminders(from calendar: EKCalendar, skipCompleted: Bool) -> [ReminderJSON] {
