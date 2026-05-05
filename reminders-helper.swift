@@ -80,7 +80,7 @@ func fetchReminders(from calendar: EKCalendar, skipCompleted: Bool) -> [Reminder
     }
     fetchSemaphore.wait()
 
-    return results.compactMap { r in
+    return results.compactMap { r -> ReminderJSON? in
         if skipCompleted && r.isCompleted { return nil }
         let dueDateStr: String?
         if let d = r.dueDateComponents?.date {
