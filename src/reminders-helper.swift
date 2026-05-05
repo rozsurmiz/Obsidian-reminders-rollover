@@ -2,6 +2,7 @@
 
 import Foundation
 import EventKit
+import ObjectiveC
 
 // ─── CLI interface ───────────────────────────────────────────────
 // Usage:
@@ -69,6 +70,17 @@ struct ListInfo: Codable {
     let color: String?
 }
 
+/// Check if a reminder is flagged (compatible with all macOS versions)
+func isReminderFlagged(_ reminder: EKReminder) -> Bool {
+    let sel = NSSelectorFromString("isFlagged")
+    guard reminder.responds(to: sel) else { return false }
+    guard let method = class_getInstanceMethod(type(of: reminder), sel) else { return false }
+    let imp = method_getImplementation(method)
+    typealias IsFlaggedFunc = @convention(c) (AnyObject, Selector) -> ObjCBool
+    let fn = unsafeBitCast(imp, to: IsFlaggedFunc.self)
+    return fn(reminder, sel).boolValue
+}
+
 func fetchReminders(from calendar: EKCalendar, skipCompleted: Bool) -> [ReminderJSON] {
     let predicate = store.predicateForReminders(in: [calendar])
     var results: [EKReminder] = []
@@ -80,7 +92,7 @@ func fetchReminders(from calendar: EKCalendar, skipCompleted: Bool) -> [Reminder
     }
     fetchSemaphore.wait()
 
-    return results.compactMap { r in
+    return results.compactMap { r -> ReminderJSON? in
         if skipCompleted && r.isCompleted { return nil }
         let dueDateStr: String?
         if let d = r.dueDateComponents?.date {
@@ -93,7 +105,7 @@ func fetchReminders(from calendar: EKCalendar, skipCompleted: Bool) -> [Reminder
             id: r.calendarItemIdentifier,
             name: r.title ?? "(untitled)",
             completed: r.isCompleted,
-            flagged: r.isFlagged,
+            flagged: isReminderFlagged(r),
             dueDate: dueDateStr,
             notes: r.notes,
             priority: r.priority,

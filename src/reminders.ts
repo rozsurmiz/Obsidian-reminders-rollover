@@ -42,8 +42,8 @@ function runHelper<T>(args: string[]): Promise<T> {
       return;
     }
     execFile(
-      "/usr/bin/swift",
-      [_helperPath, ...args],
+      "/usr/bin/xcrun",
+      ["swift", _helperPath, ...args],
       { maxBuffer: 10 * 1024 * 1024, timeout: TIMEOUT_MS },
       (err, stdout, stderr) => {
         if (err) {
@@ -152,37 +152,73 @@ function stripTagAndId(text: string, tagPrefix: string): string {
     .trim();
 }
 
+/** Parse comma-separated list names from settings */
+function parseListNames(input: string): string[] {
+  return input
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
 /**
- * Full bidirectional sync:
- * 1. Pull reminders → create/update tasks in the sync note
- * 2. Push task checkbox changes → update reminder completion status
- * 3. New tasks in the sync note without a reminder ID → create in Apple Reminders
+ * Sync a single list into a note (or section of a note).
+ * Returns { pulled, pushed, created } counts.
  */
-export async function syncReminders(
+async function syncSingleList(
   vault: Vault,
+  listName: string,
+  notePath: string,
   settings: PluginSettings,
+  heading: string | null,
   onProgress?: ProgressFn
 ): Promise<{ pulled: number; pushed: number; created: number }> {
-  const { remindersListName, syncNotePath, syncTagPrefix } = settings;
+  const { syncTagPrefix } = settings;
 
-  if (onProgress) onProgress(`⏳ Reading list "${remindersListName}"…`);
+  if (onProgress) onProgress(`⏳ Reading list "${listName}"…`);
   let appleReminders: AppleReminder[];
   try {
-    appleReminders = await getReminders(remindersListName, settings.skipCompleted);
+    appleReminders = await getReminders(listName, settings.skipCompleted);
   } catch (e) {
-    new Notice(`❌ Could not read list "${remindersListName}". Check console.`);
-    throw e;
+    console.error(`Could not read list "${listName}":`, e);
+    new Notice(`❌ Could not read list "${listName}". Check console.`);
+    return { pulled: 0, pushed: 0, created: 0 };
   }
 
-  if (onProgress) onProgress(`📋 Found ${appleReminders.length} reminder(s), syncing…`);
+  if (onProgress) onProgress(`📋 ${listName}: ${appleReminders.length} reminder(s)…`);
 
-  let file = vault.getAbstractFileByPath(syncNotePath);
+  // Read or create the note
+  let file = vault.getAbstractFileByPath(notePath);
   if (!file || !(file instanceof TFile)) {
-    await vault.create(syncNotePath, `# ${remindersListName}\n\n`);
-    file = vault.getAbstractFileByPath(syncNotePath);
+    const title = heading ? `# ${heading}\n\n` : `# ${listName}\n\n`;
+    // Ensure parent folder exists
+    const folder = notePath.substring(0, notePath.lastIndexOf("/"));
+    if (folder && !vault.getAbstractFileByPath(folder)) {
+      await vault.createFolder(folder);
+    }
+    await vault.create(notePath, title);
+    file = vault.getAbstractFileByPath(notePath);
   }
   const tfile = file as TFile;
   let content = await vault.read(tfile);
+
+  // If using headings in a combined note, find or create the section
+  let sectionStart = 0;
+  let sectionEnd = content.length;
+  if (heading) {
+    const headingLine = `## ${listName}`;
+    const headingIdx = content.indexOf(headingLine);
+    if (headingIdx === -1) {
+      // Add new section at the end
+      content = content.trimEnd() + `\n\n${headingLine}\n`;
+      sectionStart = content.length;
+      sectionEnd = content.length;
+    } else {
+      sectionStart = headingIdx + headingLine.length + 1;
+      // Find next ## heading or end of file
+      const nextHeading = content.indexOf("\n## ", sectionStart);
+      sectionEnd = nextHeading === -1 ? content.length : nextHeading;
+    }
+  }
 
   const existingTasks = parseTasks(content);
   const trackedIds = new Set(existingTasks.filter((t) => t.reminderId).map((t) => t.reminderId));
@@ -200,12 +236,19 @@ export async function syncReminders(
     newLines.push(line);
     pulled++;
   }
+
   if (newLines.length > 0) {
-    content = content.trimEnd() + "\n" + newLines.join("\n") + "\n";
+    if (heading) {
+      // Insert at the end of this section
+      const before = content.substring(0, sectionEnd);
+      const after = content.substring(sectionEnd);
+      content = before.trimEnd() + "\n" + newLines.join("\n") + "\n" + after;
+    } else {
+      content = content.trimEnd() + "\n" + newLines.join("\n") + "\n";
+    }
   }
 
   // Push: checkbox changes → Apple Reminders
-  if (onProgress && existingTasks.length > 0) onProgress("🔄 Pushing checkbox changes…");
   const remMap = new Map(appleReminders.map((r) => [r.id, r]));
   for (const task of existingTasks) {
     if (!task.reminderId) continue;
@@ -223,7 +266,7 @@ export async function syncReminders(
     if (!task.text.includes(syncTagPrefix)) continue;
     const cleanName = stripTagAndId(task.text, syncTagPrefix);
     try {
-      await createReminder(remindersListName, cleanName);
+      await createReminder(listName, cleanName);
       created++;
     } catch (e) {
       console.error("Failed to create reminder:", e);
@@ -231,7 +274,7 @@ export async function syncReminders(
   }
 
   if (created > 0) {
-    const updated = await getReminders(remindersListName, settings.skipCompleted);
+    const updated = await getReminders(listName, settings.skipCompleted);
     const refreshedTasks = parseTasks(content);
     for (const task of refreshedTasks) {
       if (task.reminderId || !task.text.includes(syncTagPrefix)) continue;
@@ -250,6 +293,61 @@ export async function syncReminders(
 
   await vault.modify(tfile, content);
   return { pulled, pushed, created };
+}
+
+/**
+ * Multi-list bidirectional sync.
+ * Supports comma-separated list names.
+ * Two modes: combined note (with ## headings per list) or separate notes.
+ */
+export async function syncReminders(
+  vault: Vault,
+  settings: PluginSettings,
+  onProgress?: ProgressFn
+): Promise<{ pulled: number; pushed: number; created: number }> {
+  const listNames = parseListNames(settings.remindersListName);
+  if (listNames.length === 0) {
+    new Notice("⚠️ No list names configured. Set them in plugin settings.");
+    return { pulled: 0, pushed: 0, created: 0 };
+  }
+
+  let totalPulled = 0;
+  let totalPushed = 0;
+  let totalCreated = 0;
+
+  if (onProgress) onProgress(`⏳ Syncing ${listNames.length} list(s)…`);
+
+  for (let i = 0; i < listNames.length; i++) {
+    const listName = listNames[i];
+    if (onProgress) {
+      onProgress(`📋 Syncing "${listName}" (${i + 1}/${listNames.length})…`);
+    }
+
+    let notePath: string;
+    let heading: string | null;
+
+    if (settings.separateNotes) {
+      // Separate notes: syncNotePath is a folder, each list gets its own file
+      const folder = settings.syncNotePath.replace(/\.md$/i, "").replace(/\/+$/, "");
+      notePath = `${folder}/${listName}.md`;
+      heading = null;
+    } else if (listNames.length === 1) {
+      // Single list: use syncNotePath directly, no heading needed
+      notePath = settings.syncNotePath;
+      heading = null;
+    } else {
+      // Multiple lists in one note: use ## headings
+      notePath = settings.syncNotePath;
+      heading = listName;
+    }
+
+    const result = await syncSingleList(vault, listName, notePath, settings, heading, onProgress);
+    totalPulled += result.pulled;
+    totalPushed += result.pushed;
+    totalCreated += result.created;
+  }
+
+  return { pulled: totalPulled, pushed: totalPushed, created: totalCreated };
 }
 
 /**

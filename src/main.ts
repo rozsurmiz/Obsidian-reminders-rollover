@@ -36,6 +36,7 @@ export default class RemindersRolloverPlugin extends Plugin {
     const pluginDir = path.join(vaultPath, this.manifest.dir || path.join(".obsidian", "plugins", this.manifest.id));
     const helperPath = path.join(pluginDir, "reminders-helper.swift");
     setHelperPath(helperPath);
+    console.log("[Reminders Plugin] Helper path:", helperPath);
 
     // ── Settings tab ──
     this.addSettingTab(new SettingsTab(this.app, this));

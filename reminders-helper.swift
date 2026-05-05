@@ -2,6 +2,7 @@
 
 import Foundation
 import EventKit
+import ObjectiveC
 
 // ─── CLI interface ───────────────────────────────────────────────
 // Usage:
@@ -70,8 +71,6 @@ struct ListInfo: Codable {
 }
 
 /// Check if a reminder is flagged (compatible with all macOS versions)
-import ObjectiveC  // add this at the top, after EventKit
-
 func isReminderFlagged(_ reminder: EKReminder) -> Bool {
     let sel = NSSelectorFromString("isFlagged")
     guard reminder.responds(to: sel) else { return false }

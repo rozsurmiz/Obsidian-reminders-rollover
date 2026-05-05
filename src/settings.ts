@@ -4,11 +4,12 @@ import type RemindersRolloverPlugin from "./main";
 // ─── Settings shape ──────────────────────────────────────────────
 export interface PluginSettings {
   // Reminders sync
-  remindersListName: string;         // which Apple Reminders list to sync
+  remindersListName: string;         // comma-separated Apple Reminders list names to sync
   syncTagPrefix: string;             // tag used to mark synced tasks, e.g. #reminders
   syncNotePath: string;              // note file where synced reminders live (relative to vault root)
   autoSyncOnStartup: boolean;
   skipCompleted: boolean;            // only sync incomplete reminders (much faster)
+  separateNotes: boolean;            // create separate notes per list (otherwise one note with headings)
 
   // Flagged reminders
   syncFlagged: boolean;              // enable flagged reminders sync
@@ -29,8 +30,9 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   syncNotePath: "Reminders.md",
   autoSyncOnStartup: false,
   skipCompleted: true,
+  separateNotes: false,
 
-  syncFlagged: true,
+  syncFlagged: false,
   flaggedNotePath: "Flagged Reminders.md",
 
   rolloverOnStartup: true,
@@ -58,8 +60,8 @@ export class SettingsTab extends PluginSettingTab {
     containerEl.createEl("h2", { text: "Apple Reminders Sync" });
 
     new Setting(containerEl)
-      .setName("Reminders list name")
-      .setDesc("The Apple Reminders list to sync with.")
+      .setName("Reminders list names")
+      .setDesc("Comma-separated list names to sync (e.g. NB, SpecPred, Admin). Use 'Show available Reminders lists' command to see all options.")
       .addText((text) =>
         text
           .setPlaceholder("Reminders")
@@ -72,13 +74,25 @@ export class SettingsTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Sync note path")
-      .setDesc("Vault-relative path to the note that holds synced reminders (e.g. Reminders.md).")
+      .setDesc("Vault-relative path for synced reminders. For multiple lists with a single note, each list gets its own heading. For separate notes, this is the folder path (e.g. Reminders/).")
       .addText((text) =>
         text
           .setPlaceholder("Reminders.md")
           .setValue(this.plugin.settings.syncNotePath)
           .onChange(async (value) => {
             this.plugin.settings.syncNotePath = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Separate notes per list")
+      .setDesc("Create a separate note for each list (e.g. Reminders/NB.md) instead of one combined note.")
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.separateNotes)
+          .onChange(async (value) => {
+            this.plugin.settings.separateNotes = value;
             await this.plugin.saveSettings();
           })
       );
