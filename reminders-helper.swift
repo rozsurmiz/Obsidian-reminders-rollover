@@ -69,6 +69,11 @@ struct ListInfo: Codable {
     let color: String?
 }
 
+/// Check if a reminder is flagged (compatible with all macOS versions)
+func isReminderFlagged(_ reminder: EKReminder) -> Bool {
+    return (reminder.value(forKey: "flagged") as? Bool) ?? false
+}
+
 func fetchReminders(from calendar: EKCalendar, skipCompleted: Bool) -> [ReminderJSON] {
     let predicate = store.predicateForReminders(in: [calendar])
     var results: [EKReminder] = []
@@ -93,7 +98,7 @@ func fetchReminders(from calendar: EKCalendar, skipCompleted: Bool) -> [Reminder
             id: r.calendarItemIdentifier,
             name: r.title ?? "(untitled)",
             completed: r.isCompleted,
-            flagged: r.isFlagged,
+            flagged: isReminderFlagged(r),
             dueDate: dueDateStr,
             notes: r.notes,
             priority: r.priority,
